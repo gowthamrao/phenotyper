@@ -28,21 +28,54 @@ tempEmulationSchema = getOption("sqlRenderTempEmulationSchema")
 
 
 # Cohort Definitions ----
-targetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |> 
-  dplyr::filter(stringr::str_detect(string = tolower(cohortName), pattern = "anaphylaxis")) |> 
-  dplyr::pull(cohortId) |> 
+targetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
+  dplyr::filter(stringr::str_detect(string = tolower(cohortName), pattern = "anaphylaxis")) |>
+  dplyr::pull(cohortId) |>
   unique()
-subsetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |> 
-  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |> 
-  dplyr::pull(cohortId) |> 
+subsetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
+  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |>
+  dplyr::pull(cohortId) |>
   unique()
-featureCohortIds <- PhenotypeLibrary::getPhenotypeLog() |> 
-  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |> 
-  dplyr::pull(cohortId) |> 
+featureCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
+  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |>
+  dplyr::pull(cohortId) |>
   unique()
 
 cohortDefinitionSet <-
   PhenotypeLibrary::getPlCohortDefinitionSet(cohortIds = c(targetCohortIds, subsetCohortIds, featureCohortIds) |> unique())
+
+
+earliestOccurrenceWith365 <- CohortGenerator::createLimitSubset(
+  name = "Earliest event with 365 days prior observation time",
+  priorTime = 365,
+  followUpTime = 0,
+  limitTo = "earliestRemaining"
+)
+
+applySubsetOnCohortDefinitionSet <- function(cohortDefinitionSet,
+                                             definitionId,
+                                             name = '',
+                                             functionsToApply) {
+  outputDefinitionSet <- c()
+  for (i in (1:nrow(cohortDefinitionSet))) {
+    addDefinition <- CohortGenerator::createCohortSubsetDefinition(
+      name = name,
+      definitionId = definitionId,
+      subsetOperators = list(functionsToApply)
+    )
+    outputDefinitionSet[[i]] <- cohortDefinitionSet[i,] |>
+      CohortGenerator::addCohortSubsetDefinition(addDefinition)
+  }
+  return(dplyr::bind_rows(outputDefinitionSet))
+}
+
+cohortDefinitionSet <-
+  subsetOperator(
+    cohortDefinitionSet = cohortDefinitionSet |>
+      dplyr::filter(cohortId %in% targetCohortIds),
+    functionsToApply = earliestOccurrenceWith365,
+    definitionId = 1
+  )
 
 cohortTableNames = CohortGenerator::getCohortTableNames(cohortTable =
                                                           paste0("c", studyName, "_", cdmSource$sourceId))
