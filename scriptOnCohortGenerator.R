@@ -1,4 +1,4 @@
-remotes::install_github("OHDSI/FeatureExtraction", ref = "cohortCovariates")
+# remotes::install_github("OHDSI/FeatureExtraction")#, ref = "cohortCovariates")
 
 studyName <- "cohortSubset"
 
@@ -30,19 +30,21 @@ tempEmulationSchema = getOption("sqlRenderTempEmulationSchema")
 # Cohort Definitions ----
 targetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
   dplyr::filter(stringr::str_detect(string = tolower(cohortName), pattern = "anaphylaxis")) |>
+  dplyr::filter(cohortId == 259) |>
   dplyr::pull(cohortId) |>
   unique()
 subsetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
   dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |>
+  dplyr::filter(cohortId %in% c(23, 24)) |>
   dplyr::pull(cohortId) |>
   unique()
 featureCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
-  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |>
+  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Symptoms")) |>
   dplyr::pull(cohortId) |>
   unique()
 
 cohortDefinitionSet <-
-  PhenotypeLibrary::getPlCohortDefinitionSet(cohortIds = c(targetCohortIds, subsetCohortIds, featureCohortIds) |> unique())
+  PhenotypeLibrary::getPlCohortDefinitionSet(cohortIds = c(targetCohortIds) |> unique())
 
 
 earliestOccurrenceWith365 <- CohortGenerator::createLimitSubset(
@@ -52,30 +54,25 @@ earliestOccurrenceWith365 <- CohortGenerator::createLimitSubset(
   limitTo = "earliestRemaining"
 )
 
-applySubsetOnCohortDefinitionSet <- function(cohortDefinitionSet,
-                                             definitionId,
-                                             name = '',
-                                             functionsToApply) {
-  outputDefinitionSet <- c()
-  for (i in (1:nrow(cohortDefinitionSet))) {
-    addDefinition <- CohortGenerator::createCohortSubsetDefinition(
-      name = name,
-      definitionId = definitionId,
-      subsetOperators = list(functionsToApply)
-    )
-    outputDefinitionSet[[i]] <- cohortDefinitionSet[i,] |>
-      CohortGenerator::addCohortSubsetDefinition(addDefinition)
-  }
-  return(dplyr::bind_rows(outputDefinitionSet))
-}
 
-cohortDefinitionSet <-
-  subsetOperator(
-    cohortDefinitionSet = cohortDefinitionSet |>
-      dplyr::filter(cohortId %in% targetCohortIds),
-    functionsToApply = earliestOccurrenceWith365,
-    definitionId = 1
+lastEver <- CohortGenerator::createLimitSubset(
+  name = "Last ever event",
+  priorTime = 0,
+  followUpTime = 0,
+  limitTo = "lastEver"
+)
+
+cohortDefinitionSet <- cohortDefinitionSet |>
+  CohortGenerator::addCohortSubsetDefinition(
+    cohortSubsetDefintion = CohortGenerator::createCohortSubsetDefinition(
+      name = '',
+      definitionId = 2,
+      subsetOperators = list(lastEver)
+    ),
+    targetCohortIds = targetCohortIds,
+    overwriteExisting = TRUE
   )
+
 
 cohortTableNames = CohortGenerator::getCohortTableNames(cohortTable =
                                                           paste0("c", studyName, "_", cdmSource$sourceId))
@@ -111,11 +108,22 @@ CohortGenerator::generateCohortSet(
   incrementalFolder = file.path(outputFolder, "incremental")
 )
 
+
+FeatureExtractionSettingsCohortDiagnostics <- CohortDiagnostics::getDefaultCovariateSettings()
+FeatureExtractionSettingsCohortBasedCovariateSettings <- FeatureExtraction::createCohortBasedTemporalCovariateSettings(
+  analysisId = 150,
+  covariateCohortDatabaseSchema = "main",
+  covariateCohortTable = paste0(stringr::str_squish("pl_"),
+                                stringr::str_squish(cdmSource$sourceKey)),
+  covariateCohorts = 
+    PhenotypeLibrary::getPlCohortDefinitionSet(cohortIds = featureCohortIds |> unique()),
+  valueType = "binary",
+  temporalStartDays = FeatureExtractionSettingsCohortDiagnostics$temporalStartDays,
+  temporalEndDays = FeatureExtractionSettingsCohortDiagnostics$temporalEndDays
+)
+FeatureExtractionCovariateSettings <- list(FeatureExtractionSettingsCohortDiagnostics, FeatureExtractionSettingsCohortBasedCovariateSettings)
+
 ## Execute Cohort Diagnostics on remote ----
-
-cohortDiagnosticsDefaultTemporalCovariateSettings <-
-  CohortDiagnostics::createDefaultTemporalCovaraiteSettings()
-
 CohortDiagnostics::executeDiagnostics(
   cohortDefinitionSet = cohortDefinitionSet,
   exportFolder = outputFolder,
@@ -128,9 +136,9 @@ CohortDiagnostics::executeDiagnostics(
   connectionDetails = connectionDetails,
   cohortTableNames = cohortTableNames,
   vocabularyDatabaseSchema = vocabularyDatabaseSchema,
+  temporalCovariateSettings = FeatureExtractionCovariateSettings,
   incremental = TRUE
 )
-
 
 
 # package results ----
