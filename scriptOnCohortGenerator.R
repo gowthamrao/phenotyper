@@ -112,7 +112,7 @@ CohortGenerator::generateCohortSet(
 FeatureExtractionSettingsCohortDiagnostics <- CohortDiagnostics::getDefaultCovariateSettings()
 FeatureExtractionSettingsCohortBasedCovariateSettings <- FeatureExtraction::createCohortBasedTemporalCovariateSettings(
   analysisId = 150,
-  covariateCohortDatabaseSchema = "main",
+  covariateCohortDatabaseSchema = cohortDatabaseSchema,
   covariateCohortTable = paste0(stringr::str_squish("pl_"),
                                 stringr::str_squish(cdmSource$sourceKey)),
   covariateCohorts = 
