@@ -1,50 +1,33 @@
-# remotes::install_github("OHDSI/FeatureExtraction")#, ref = "cohortCovariates")
+# remotes::install_github("OHDSI/FeatureExtraction", ref = "cohortCovariates")
+# remotes::install_github("OHDSI/SkeletonCohortDiagnostics")
+options(error = traceback)
+studyName <- "cohortSubsetEunomia"
+originalCohortDefinitionSet <-
+  CohortGenerator::getCohortDefinitionSet(
+    settingsFileName = "settings/CohortsToCreate.csv",
+    jsonFolder = "cohorts",
+    sqlFolder = "sql/sql_server",
+    packageName = "SkeletonCohortDiagnosticsStudy",
+    cohortFileNameValue = "cohortId"
+  ) %>%  dplyr::tibble() 
 
-studyName <- "cohortSubset"
+cohortDefinitionSet <- originalCohortDefinitionSet
+connectionDetails <- Eunomia::getEunomiaConnectionDetails()
 
-# connection details ----
-connectionSpecifications <- cdmSources %>%
-  dplyr::filter(sequence == 1) %>%
-  dplyr::filter(database == 'truven_mdcd')
-
-cdmSource <- getCdmSource()
-
-connectionDetails <-
-  DatabaseConnector::createConnectionDetails(
-    dbms = cdmSource$dbms,
-    user = keyring::key_get(service = userNameService),
-    password = keyring::key_get(service = passwordService),
-    port = cdmSource$port,
-    server = cdmSource$serverFinal
-  )
-
-databaseId = cdmSource$sourceKey
-databaseName = cdmSource$sourceName
-databaseDescription = cdmSource$sourceName
-cdmDatabaseSchema = cdmSource$cdmDatabaseSchemaFinal
-vocabularyDatabaseSchema = cdmSource$vocabDatabaseSchemaFinal
-cohortDatabaseSchema = cdmSource$cohortDatabaseSchemaFinal
+databaseId = 'eunomia'
+databaseName = 'eunomia'
+databaseDescription = 'eunomia'
+cdmDatabaseSchema = 'main'
+vocabularyDatabaseSchema = 'main'
+cohortDatabaseSchema = 'main'
 tempEmulationSchema = getOption("sqlRenderTempEmulationSchema")
 
 
 # Cohort Definitions ----
-targetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
-  dplyr::filter(stringr::str_detect(string = tolower(cohortName), pattern = "anaphylaxis")) |>
-  dplyr::filter(cohortId == 259) |>
-  dplyr::pull(cohortId) |>
-  unique()
-subsetCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
-  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Visits")) |>
-  dplyr::filter(cohortId %in% c(23, 24)) |>
-  dplyr::pull(cohortId) |>
-  unique()
-featureCohortIds <- PhenotypeLibrary::getPhenotypeLog() |>
-  dplyr::filter(stringr::str_detect(string = hashTag, pattern = "#Symptoms")) |>
-  dplyr::pull(cohortId) |>
-  unique()
-
-cohortDefinitionSet <-
-  PhenotypeLibrary::getPlCohortDefinitionSet(cohortIds = c(targetCohortIds) |> unique())
+targetCohortIds <- c(17493)
+  
+subsetCohortIds <- c(17692, 17693)
+featureCohortIds <- c(14907)
 
 addCohortDefinitionSubset <-
   function(cohortDefinitionSet,
@@ -196,15 +179,15 @@ cohortDefinitionSet <-
 # remove persons in second from 1st - this gives
 
 cohortTableNames = CohortGenerator::getCohortTableNames(cohortTable =
-                                                          paste0("c", studyName, "_", cdmSource$sourceId))
+                                                          paste0("c", studyName))
 
 # output folder information ----
 outputFolder <-
-  file.path("D:", "temp", "outputFolder", studyName, cdmSource$sourceKey)
+  file.path("D:", "temp", "outputFolder", studyName, databaseId)
 ## optionally delete previous execution ----
-# unlink(x = outputFolder,
-#        recursive = TRUE,
-#        force = TRUE)
+unlink(x = outputFolder,
+       recursive = TRUE,
+       force = TRUE)
 dir.create(path = outputFolder,
            showWarnings = FALSE,
            recursive = TRUE)
@@ -218,7 +201,7 @@ CohortGenerator::createCohortTables(
   incremental = TRUE
 )
 ## Generate cohort on remote ----
-CohortGenerator::generateCohortSet(
+cohortGenerated <- CohortGenerator::generateCohortSet(
   connectionDetails = connectionDetails,
   cdmDatabaseSchema = cdmDatabaseSchema,
   tempEmulationSchema = tempEmulationSchema,
@@ -232,29 +215,64 @@ CohortGenerator::generateCohortSet(
 
 FeatureExtractionSettingsCohortDiagnostics <-
   CohortDiagnostics::getDefaultCovariateSettings()
+
 FeatureExtractionSettingsCohortBasedCovariateSettings <-
   FeatureExtraction::createCohortBasedTemporalCovariateSettings(
     analysisId = 150,
     covariateCohortDatabaseSchema = cohortDatabaseSchema,
-    covariateCohortTable = paste0(
-      stringr::str_squish("pl_"),
-      stringr::str_squish(cdmSource$sourceKey)
-    ),
-    covariateCohorts =
-      PhenotypeLibrary::getPhenotypeLog(cohortIds = featureCohortIds |> unique()) |>
+    covariateCohortTable = cohortTableNames$cohortTable,
+    covariateCohorts = cohortDefinitionSet |> 
+      dplyr::filter(cohortId %in% c(featureCohortIds)) |>
       dplyr::select(cohortId,
                     cohortName),
     valueType = "binary",
     temporalStartDays = FeatureExtractionSettingsCohortDiagnostics$temporalStartDays,
     temporalEndDays = FeatureExtractionSettingsCohortDiagnostics$temporalEndDays
   )
-FeatureExtractionCovariateSettings <-
+FeatureExtractionCovariateSettings <- 
   list(
-    FeatureExtractionSettingsCohortBasedCovariateSettings
-    # ,
-    # FeatureExtractionSettingsCohortDiagnostics
+    FeatureExtractionSettingsCohortBasedCovariateSettings,
+    FeatureExtractionSettingsCohortDiagnostics
   )
 
+connection <- DatabaseConnector::connect(connectionDetails = connectionDetails)
+
+
+# just simple plain vanile covariate settings
+featureExtractionOutput1 <-
+  FeatureExtraction::getDbCovariateData(
+    connection = connection,
+    oracleTempSchema = tempEmulationSchema,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    cohortTable = cohortTableNames$cohortTable,
+    covariateSettings = FeatureExtraction::createDefaultTemporalCovariateSettings(),
+    aggregated = TRUE
+  )
+
+# cohort as covariate setting
+featureExtractionOutput2 <-
+  FeatureExtraction::getDbCovariateData(
+    connection = connection,
+    oracleTempSchema = tempEmulationSchema,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    cohortTable = cohortTableNames$cohortTable,
+    covariateSettings = FeatureExtraction::createDefaultTemporalCovariateSettings(),
+    aggregated = TRUE
+  )
+
+# using a more complicated list of covariate settings
+featureExtractionOutput3 <-
+  FeatureExtraction::getDbCovariateData(
+    connection = connection,
+    oracleTempSchema = tempEmulationSchema,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    cohortTable = cohortTableNames$cohortTable,
+    covariateSettings = FeatureExtractionCovariateSettings,
+    aggregated = TRUE
+  )
 ## Execute Cohort Diagnostics on remote ----
 CohortDiagnostics::executeDiagnostics(
   cohortDefinitionSet = cohortDefinitionSet,
@@ -267,8 +285,10 @@ CohortDiagnostics::executeDiagnostics(
   tempEmulationSchema = tempEmulationSchema,
   connectionDetails = connectionDetails,
   cohortTableNames = cohortTableNames,
+  runIncidenceRate = FALSE,
+  runCohortRelationship = FALSE,
   vocabularyDatabaseSchema = vocabularyDatabaseSchema,
-  temporalCovariateSettings = FeatureExtractionCovariateSettings,
+  temporalCovariateSettings = FeatureExtractionSettingsCohortBasedCovariateSettings, ## change to FeatureExtractionCovariateSettings if list
   incremental = TRUE
 )
 
@@ -279,3 +299,35 @@ setwd(outputFolder)
 CohortDiagnostics::createMergedResultsFile(dataFolder = outputFolder, overwrite = TRUE)
 # Launch diagnostics explorer shiny app ----
 CohortDiagnostics::launchDiagnosticsExplorer()
+
+
+######
+
+diagnosticsFileName <- "CreatedDiagnostics.csv"
+
+listFiles <-
+  list.files(
+    path = outputFolder,
+    pattern = diagnosticsFileName,
+    full.names = TRUE,
+    recursive = TRUE
+  )
+
+# "getCohortCounts", "runInclusionStatistics", "runIncludedSourceConcepts",
+# "runBreakdownIndexEvents", "runOrphanConcepts", 
+# "runVisitContext", "runIncidenceRate", "runCohortOverlap","runCohortAsFeatures",
+# "runTemporalCohortCharacterization"
+
+
+tasksToRemove <- c("runTemporalCohortCharacterization")
+
+
+for (i in (1:length(listFiles))) {
+  readr::read_csv(
+    file = listFiles[[i]],
+    col_types = readr::cols(),
+    guess_max = min(1e7)
+  ) %>%
+    dplyr::filter(!task %in% tasksToRemove) %>%
+    readr::write_excel_csv(file = listFiles[[i]])
+}
